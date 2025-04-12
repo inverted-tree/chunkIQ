@@ -4,6 +4,7 @@ mod parse;
 mod trace;
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::{path::PathBuf, usize};
 
 #[derive(Parser)]
 #[command(
@@ -32,18 +33,18 @@ enum Commands {
 
 #[derive(ValueEnum, Clone, Debug)]
 enum ChunkerType {
-    SC2,
-    SC4,
-    SC8,
-    SC16,
-    SC32,
-    SC64,
-    CDC2,
-    CDC4,
-    CDC8,
-    CDC16,
-    CDC32,
-    CDC64,
+    SC2K,
+    SC4K,
+    SC8K,
+    SC16K,
+    SC32K,
+    SC64K,
+    CDC2K,
+    CDC4K,
+    CDC8K,
+    CDC16K,
+    CDC32K,
+    CDC64K,
 }
 
 #[derive(ValueEnum, Clone, Debug)]
@@ -60,7 +61,7 @@ struct TraceArgs {
         long = "chunker",
         help = "Specify the chunking method",
         value_enum,
-        default_value_t = ChunkerType::CDC8
+        default_value_t = ChunkerType::CDC8K
     )]
     chunker: ChunkerType,
 
@@ -82,9 +83,9 @@ struct TraceArgs {
         short = 'j',
         long = "jobs",
         help = "How many parallel jobs to run",
-        default_value = "1"
+        default_value = "CPU core count"
     )]
-    jobs: Option<u32>,
+    jobs: Option<usize>,
 
     #[arg(
         short = 'l',
@@ -105,7 +106,7 @@ struct TraceArgs {
         name = "FILE",
         help = "Redirect output to a file"
     )]
-    outputFile: Option<String>,
+    outputFile: Option<PathBuf>,
 
     #[arg(
         short = 'H',
@@ -136,7 +137,7 @@ struct TraceArgs {
         name = "LOG_FILE",
         help = "Resume an aborted job from a progress file"
     )]
-    progressFile: Option<String>,
+    progressFile: Option<PathBuf>,
 
     #[arg(
         long = "salt",
@@ -153,7 +154,28 @@ struct TraceArgs {
     silent: bool,
 
     #[arg(required = true, help = "Input files or directories to process")]
-    fileNames: Vec<String>,
+    fileNames: Vec<PathBuf>,
+}
+
+impl TraceArgs {
+    fn validate(&mut self) -> Result<(), String> {
+        self.jobs
+            .get_or_insert(std::thread::available_parallelism().unwrap().get());
+        self.reportInterval.get_or_insert(60);
+        if let Some(ref file) = self.progressFile {
+            if !file.exists() {
+                return Err(format!("Progress File {:?} does not exist", file));
+            }
+        }
+        let ref files = self.fileNames;
+        for file in files {
+            if !file.exists() {
+                return Err(format!("Input file {:?} does not exist", file));
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Parser, Debug)]
@@ -164,7 +186,7 @@ struct ParseArgs {
         name = "FILE",
         help = "Redirect output to a file"
     )]
-    output: Option<String>,
+    output: Option<PathBuf>,
 
     #[arg(
         short = 'I',
@@ -176,14 +198,28 @@ struct ParseArgs {
     reportInterval: Option<u32>,
 
     #[arg(required = true, help = "Trace files to process")]
-    fileNames: Vec<String>,
+    fileNames: Vec<PathBuf>,
+}
+
+impl ParseArgs {
+    fn validate(&mut self) -> Result<(), String> {
+        self.reportInterval.get_or_insert(60);
+
+        Ok(())
+    }
 }
 
 fn main() {
     let cli: Cli = Cli::parse();
 
     match cli.command {
-        Commands::Parse(args) => parse::parser::run(args),
-        Commands::Trace(args) => trace::tracer::run(args),
+        Commands::Parse(mut args) => match args.validate() {
+            Ok(()) => parse::parser::run(args),
+            Err(e) => eprintln!("[Error] {}", e),
+        },
+        Commands::Trace(mut args) => match args.validate() {
+            Ok(()) => trace::tracer::run(args),
+            Err(e) => eprintln!("[Error] {}", e),
+        },
     }
 }
