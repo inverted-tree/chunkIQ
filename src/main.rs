@@ -31,7 +31,7 @@ enum Commands {
     Parse(ParseArgs),
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug)]
 enum ChunkerType {
     SC2K,
     SC4K,
@@ -47,7 +47,7 @@ enum ChunkerType {
     CDC64K,
 }
 
-#[derive(ValueEnum, Clone, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug)]
 enum HashType {
     SHA1,
     SHA256,
@@ -63,7 +63,7 @@ struct TraceArgs {
         value_enum,
         default_value_t = ChunkerType::CDC8K
     )]
-    chunker: ChunkerType,
+    chunkerType: ChunkerType,
 
     #[arg(
         long = "digest",
@@ -82,8 +82,7 @@ struct TraceArgs {
     #[arg(
         short = 'j',
         long = "jobs",
-        help = "How many parallel jobs to run",
-        default_value = "CPU core count"
+        help = "How many parallel jobs to run (default = #cores)"
     )]
     jobs: Option<usize>,
 
@@ -122,7 +121,7 @@ struct TraceArgs {
         help = "Print a status report every <INTERVAL> seconds",
         default_value = "60"
     )]
-    reportInterval: Option<u32>,
+    reportInterval: u32,
 
     #[arg(
         short = 'r',
@@ -161,7 +160,6 @@ impl TraceArgs {
     fn validate(&mut self) -> Result<(), String> {
         self.jobs
             .get_or_insert(std::thread::available_parallelism().unwrap().get());
-        self.reportInterval.get_or_insert(60);
         if let Some(ref file) = self.progressFile {
             if !file.exists() {
                 return Err(format!("Progress File {:?} does not exist", file));
@@ -214,11 +212,11 @@ fn main() {
 
     match cli.command {
         Commands::Parse(mut args) => match args.validate() {
-            Ok(()) => parse::parser::run(args),
+            Ok(()) => parse::parser::run(&args),
             Err(e) => eprintln!("[Error] {}", e),
         },
         Commands::Trace(mut args) => match args.validate() {
-            Ok(()) => trace::tracer::run(args),
+            Ok(()) => trace::tracer::run(&args),
             Err(e) => eprintln!("[Error] {}", e),
         },
     }
