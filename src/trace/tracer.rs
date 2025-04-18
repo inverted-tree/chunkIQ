@@ -1,8 +1,16 @@
-use crossbeam::channel::{Receiver, Sender, unbounded};
+use crossbeam::queue::ArrayQueue;
 
 use crate::{ChunkerType, HashType, TraceArgs};
 
-use std::{path::PathBuf, thread};
+use std::{
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 #[derive(Clone)]
 struct ChunkerConfig {
@@ -16,68 +24,81 @@ struct ChunkingTask {
     config: ChunkerConfig,
 }
 
-// struct WorkerContext {
-//     chunkers: HashMap<ChunkerConfig, Box<dyn Chunker>>,
-//     bufferPool: BufferPool,
-// }
-//
-// trait Chunker {
-//     fn reset(&mut self);
-//     fn chunkFile(&mut self, file &PathBuf, output: &mut dyn ChunkSink) -> Result<()>;
-// }
+fn spawnWorkers(
+    numWorkers: usize,
+    queue: Arc<ArrayQueue<ChunkingTask>>,
+    isDone: Arc<AtomicBool>,
+) -> Vec<thread::JoinHandle<()>> {
+    let mut handles = Vec::with_capacity(numWorkers);
 
-fn initWorkerPool<F>(workerCount: usize, taskHandler: F) -> Sender<ChunkingTask>
-where
-    F: Fn(ChunkingTask) + Send + Sync + 'static + Clone,
-{
-    let (sender, reciever): (Sender<ChunkingTask>, Receiver<ChunkingTask>) = unbounded();
+    for workerIdx in 0..numWorkers {
+        let queue = Arc::clone(&queue);
+        let isDone = Arc::clone(&isDone);
 
-    for _ in 0..workerCount {
-        let reciever = reciever.clone();
-        let handler = taskHandler.clone();
+        let handle = thread::spawn(move || {
+            println!("Worker {}: Started.", workerIdx);
+            loop {
+                match queue.pop() {
+                    Some(task) => {
+                        println!(
+                            "Worker {}: Chunking {:?} with {:?} using {:?} salted with {:?}.",
+                            workerIdx,
+                            task.filename,
+                            task.config.chunkerType,
+                            task.config.hashType,
+                            task.config.hashSalt.unwrap_or("no salt".to_string())
+                        );
+                    }
+                    None => {
+                        if isDone.load(Ordering::Relaxed) {
+                            break;
+                        }
 
-        thread::spawn(move || {
-            while let Ok(task) = reciever.recv() {
-                handler(task);
+                        println!("Worker {}: No task in queue. Sleeping.", workerIdx);
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
             }
         });
+        handles.push(handle);
     }
-
-    sender
+    handles
 }
 
 pub fn run(args: &TraceArgs) {
-    // This is just a dummy chunking chunking job
-    let chunkFile = |task: ChunkingTask| {
-        println!(
-            "Chunking file {:?} with config [ ct: {:?} ; ht: {:?} ; hs {:?} ]",
-            task.filename, task.config.chunkerType, task.config.hashType, task.config.hashSalt
-        );
-    };
+    let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
+    let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
+    let isDone = Arc::new(AtomicBool::new(false));
 
-    let sender = initWorkerPool(args.jobs.unwrap(), chunkFile);
-
-    let configs = vec![
-        ChunkerConfig {
-            chunkerType: args.chunkerType,
-            hashType: args.digestType,
-            hashSalt: args.hashSalt.clone(),
-        },
-        ChunkerConfig {
-            chunkerType: args.chunkerType,
-            hashType: args.digestType,
-            hashSalt: args.hashSalt.clone(),
-        },
-    ];
+    let workers = spawnWorkers(
+        args.jobs.unwrap_or(1),
+        Arc::clone(&queue),
+        Arc::clone(&isDone),
+    );
 
     for file in &args.fileNames {
-        for conf in &configs {
+        for chunker in &args.chunkerTypes {
             let task = ChunkingTask {
                 filename: file.clone(),
-                config: conf.clone(),
+                config: ChunkerConfig {
+                    chunkerType: chunker.clone(),
+                    hashType: args.digestType,
+                    hashSalt: args.hashSalt.clone(),
+                },
             };
-            sender.send(task).expect("Failed to send task");
+            match queue.push(task) {
+                Ok(_) => (),
+                Err(_) => eprintln!("Failed to add task to queue - queue is full!"),
+            }
         }
     }
-    thread::sleep(std::time::Duration::from_millis(10));
+    isDone.store(true, Ordering::Relaxed);
+
+    for (i, worker) in workers.into_iter().enumerate() {
+        if let Err(e) = worker.join() {
+            eprintln!("Error joining worker thread {}: {:?}", i, e);
+        } else {
+            println!("Main thread: Worker {} completed successfully", i);
+        }
+    }
 }

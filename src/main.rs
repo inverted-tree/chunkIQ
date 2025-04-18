@@ -59,11 +59,10 @@ struct TraceArgs {
     #[arg(
         short = 'c',
         long = "chunker",
-        help = "Specify the chunking method",
-        value_enum,
-        default_value_t = ChunkerType::CDC8K
+        help = "Specify the chunking method (default = CDC8K)",
+        value_enum
     )]
-    chunkerType: ChunkerType,
+    chunkerTypes: Vec<ChunkerType>,
 
     #[arg(
         long = "digest",
@@ -158,6 +157,9 @@ struct TraceArgs {
 
 impl TraceArgs {
     fn validate(&mut self) -> Result<(), String> {
+        if self.chunkerTypes.is_empty() {
+            self.chunkerTypes.push(ChunkerType::CDC8K);
+        }
         self.jobs
             .get_or_insert(std::thread::available_parallelism().unwrap().get());
         if let Some(ref file) = self.progressFile {
