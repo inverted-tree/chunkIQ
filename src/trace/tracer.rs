@@ -62,11 +62,8 @@ fn spawnWorkers(
                             hasher.update(chunk);
 
                             let hash = hasher.finalize_reset();
-
-                            if hashSet.contains(&hash) {
+                            if !hashSet.insert(hash) {
                                 localDupCount += 1;
-                            } else {
-                                hashSet.insert(hash);
                             }
                         }
                     }
