@@ -1,12 +1,17 @@
+use crate::chunker;
+
 use crossbeam::queue::ArrayQueue;
+use memmap2::Mmap;
 
 use crate::{ChunkerType, HashType, TraceArgs};
 
 use std::{
-    path::PathBuf,
+    fs::File,
+    io::Result,
+    string::String,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
     thread,
     time::Duration,
@@ -20,7 +25,9 @@ struct ChunkerConfig {
 }
 
 struct ChunkingTask {
-    filename: PathBuf,
+    mmap: Arc<Mmap>,
+    offset: usize,
+    length: usize,
     config: ChunkerConfig,
 }
 
@@ -40,14 +47,14 @@ fn spawnWorkers(
             loop {
                 match queue.pop() {
                     Some(task) => {
-                        println!(
-                            "Worker {}: Chunking {:?} with {:?} using {:?} salted with {:?}.",
-                            workerIdx,
-                            task.filename,
-                            task.config.chunkerType,
-                            task.config.hashType,
-                            task.config.hashSalt.unwrap_or("no salt".to_string())
-                        );
+                        let chunks = task.mmap.chunks(task.config.chunkerType.getSize());
+                        for chunk in chunks {
+                            println!(
+                                "Worker {}: Reading chunk: {:?}",
+                                workerIdx,
+                                std::str::from_utf8(chunk)
+                            );
+                        }
                     }
                     None => {
                         if isDone.load(Ordering::Relaxed) {
@@ -65,7 +72,7 @@ fn spawnWorkers(
     handles
 }
 
-pub fn run(args: &TraceArgs) {
+pub fn run(args: &TraceArgs) -> Result<()> {
     let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
     let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
     let isDone = Arc::new(AtomicBool::new(false));
@@ -76,16 +83,25 @@ pub fn run(args: &TraceArgs) {
         Arc::clone(&isDone),
     );
 
-    for file in &args.fileNames {
+    for fileName in &args.fileNames {
         for chunker in &args.chunkerTypes {
+            let file = File::open(fileName)?;
+            let mmap = unsafe { Mmap::map(&file)? };
+
+            let offset: usize = 0;
+            let length: usize = 0;
+
             let task = ChunkingTask {
-                filename: file.clone(),
+                mmap: Arc::new(mmap),
+                offset,
+                length,
                 config: ChunkerConfig {
                     chunkerType: chunker.clone(),
                     hashType: args.digestType,
                     hashSalt: args.hashSalt.clone(),
                 },
             };
+
             match queue.push(task) {
                 Ok(_) => (),
                 Err(_) => eprintln!("Failed to add task to queue - queue is full!"),
@@ -101,4 +117,6 @@ pub fn run(args: &TraceArgs) {
             println!("Main thread: Worker {} completed successfully", i);
         }
     }
+
+    Ok(())
 }
