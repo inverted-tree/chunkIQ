@@ -1,7 +1,9 @@
 use crate::chunker;
 
 use crossbeam::queue::ArrayQueue;
+use digest::Digest;
 use memmap2::Mmap;
+use sha1::Sha1;
 
 use crate::{ChunkerType, HashType, TraceArgs};
 
@@ -47,12 +49,19 @@ fn spawnWorkers(
             loop {
                 match queue.pop() {
                     Some(task) => {
+                        let mut hasher = Sha1::new();
                         let chunks = task.mmap.chunks(task.config.chunkerType.getSize());
+
                         for chunk in chunks {
+                            hasher.update(chunk);
                             println!(
-                                "Worker {}: Reading chunk: {:?}",
+                                "Worker {}: Chunk hash is: {:?}",
                                 workerIdx,
-                                std::str::from_utf8(chunk)
+                                hasher
+                                    .finalize_reset()
+                                    .iter()
+                                    .map(|b| format!("{:02x}", b))
+                                    .collect::<String>()
                             );
                         }
                     }
