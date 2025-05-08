@@ -1,7 +1,8 @@
 use crate::chunker;
 
 use crossbeam::queue::ArrayQueue;
-use digest::Digest;
+use dashmap::DashSet;
+use digest::{consts::True, Digest, Output};
 use memmap2::Mmap;
 use sha1::Sha1;
 
@@ -31,17 +32,20 @@ struct ChunkingTask {
     offset: usize,
     length: usize,
     config: ChunkerConfig,
+    // hashSet: Arc<DashSet<Output<sha1::Sha1>>>,
 }
 
 fn spawnWorkers(
     numWorkers: usize,
     queue: Arc<ArrayQueue<ChunkingTask>>,
+    hashSet: Arc<DashSet<Output<sha1::Sha1>>>,
     isDone: Arc<AtomicBool>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(numWorkers);
 
     for workerIdx in 0..numWorkers {
         let queue = Arc::clone(&queue);
+        let hashSet = Arc::clone(&hashSet);
         let isDone = Arc::clone(&isDone);
 
         let handle = thread::spawn(move || {
@@ -54,15 +58,20 @@ fn spawnWorkers(
 
                         for chunk in chunks {
                             hasher.update(chunk);
-                            println!(
-                                "Worker {}: Chunk hash is: {:?}",
-                                workerIdx,
-                                hasher
-                                    .finalize_reset()
-                                    .iter()
-                                    .map(|b| format!("{:02x}", b))
-                                    .collect::<String>()
-                            );
+
+                            let hash = hasher.finalize_reset();
+
+                            if hashSet.contains(&hash) {
+                                println!(
+                                    "Worker {} found a duplicate chunk hash: {:?}",
+                                    workerIdx,
+                                    hash.iter()
+                                        .map(|b| format!("{:02x}", b))
+                                        .collect::<String>()
+                                );
+                            } else {
+                                hashSet.insert(hash);
+                            }
                         }
                     }
                     None => {
@@ -84,11 +93,13 @@ fn spawnWorkers(
 pub fn run(args: &TraceArgs) -> Result<()> {
     let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
     let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
+    let hashSet = Arc::new(DashSet::new());
     let isDone = Arc::new(AtomicBool::new(false));
 
     let workers = spawnWorkers(
         args.jobs.unwrap_or(1),
         Arc::clone(&queue),
+        Arc::clone(&hashSet),
         Arc::clone(&isDone),
     );
 
