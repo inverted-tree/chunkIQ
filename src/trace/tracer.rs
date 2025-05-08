@@ -13,7 +13,7 @@ use std::{
     io::Result,
     string::String,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
     },
     thread,
@@ -39,17 +39,19 @@ fn spawnWorkers(
     numWorkers: usize,
     queue: Arc<ArrayQueue<ChunkingTask>>,
     hashSet: Arc<DashSet<Output<sha1::Sha1>>>,
+    globalDupCount: Arc<AtomicUsize>,
     isDone: Arc<AtomicBool>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(numWorkers);
 
-    for workerIdx in 0..numWorkers {
+    for _workerIdx in 0..numWorkers {
         let queue = Arc::clone(&queue);
         let hashSet = Arc::clone(&hashSet);
+        let globalDupCount = Arc::clone(&globalDupCount);
         let isDone = Arc::clone(&isDone);
 
         let handle = thread::spawn(move || {
-            println!("Worker {}: Started.", workerIdx);
+            let mut localDupCount: usize = 0;
             loop {
                 match queue.pop() {
                     Some(task) => {
@@ -62,13 +64,7 @@ fn spawnWorkers(
                             let hash = hasher.finalize_reset();
 
                             if hashSet.contains(&hash) {
-                                println!(
-                                    "Worker {} found a duplicate chunk hash: {:?}",
-                                    workerIdx,
-                                    hash.iter()
-                                        .map(|b| format!("{:02x}", b))
-                                        .collect::<String>()
-                                );
+                                localDupCount += 1;
                             } else {
                                 hashSet.insert(hash);
                             }
@@ -76,10 +72,9 @@ fn spawnWorkers(
                     }
                     None => {
                         if isDone.load(Ordering::Relaxed) {
+                            globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
                             break;
                         }
-
-                        println!("Worker {}: No task in queue. Sleeping.", workerIdx);
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 }
@@ -94,12 +89,14 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
     let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
     let hashSet = Arc::new(DashSet::new());
+    let dupCount = Arc::new(AtomicUsize::new(0));
     let isDone = Arc::new(AtomicBool::new(false));
 
     let workers = spawnWorkers(
         args.jobs.unwrap_or(1),
         Arc::clone(&queue),
         Arc::clone(&hashSet),
+        Arc::clone(&dupCount),
         Arc::clone(&isDone),
     );
 
@@ -133,10 +130,13 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     for (i, worker) in workers.into_iter().enumerate() {
         if let Err(e) = worker.join() {
             eprintln!("Error joining worker thread {}: {:?}", i, e);
-        } else {
-            println!("Main thread: Worker {} completed successfully", i);
         }
     }
+    println!(
+        "Found a total of {} duplicate chunks which accounts to {}KiB.",
+        dupCount.load(Ordering::Relaxed),
+        dupCount.load(Ordering::Relaxed) * args.chunkerTypes[0].getSize() >> 10
+    );
 
     Ok(())
 }
