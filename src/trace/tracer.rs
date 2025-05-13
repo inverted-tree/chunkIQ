@@ -5,7 +5,8 @@ use crossbeam::queue::ArrayQueue;
 use dashmap::DashSet;
 use memmap2::Mmap;
 
-use crate::util::arguments::{ChunkerType, HashType, TraceArgs};
+use crate::chunker::chunker::ChunkerType;
+use crate::util::arguments::{HashType, TraceArgs};
 
 use std::{
     fs::File,
