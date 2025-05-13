@@ -1,12 +1,11 @@
 use crate::chunker;
+use crate::trace::hashers::HasherFactory;
 
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashSet;
-use digest::{consts::True, Digest, Output};
 use memmap2::Mmap;
-use sha1::Sha1;
 
-use crate::{ChunkerType, HashType, TraceArgs};
+use crate::util::arguments::{ChunkerType, HashType, TraceArgs};
 
 use std::{
     fs::File,
@@ -31,14 +30,14 @@ struct ChunkingTask {
     mmap: Arc<Mmap>,
     offset: usize,
     length: usize,
+    hasherFactory: Arc<HasherFactory>,
     config: ChunkerConfig,
-    // hashSet: Arc<DashSet<Output<sha1::Sha1>>>,
 }
 
 fn spawnWorkers(
     numWorkers: usize,
     queue: Arc<ArrayQueue<ChunkingTask>>,
-    hashSet: Arc<DashSet<Output<sha1::Sha1>>>,
+    hashSet: Arc<DashSet<Vec<u8>>>,
     globalDupCount: Arc<AtomicUsize>,
     isDone: Arc<AtomicBool>,
 ) -> Vec<thread::JoinHandle<()>> {
@@ -55,13 +54,11 @@ fn spawnWorkers(
             loop {
                 match queue.pop() {
                     Some(task) => {
-                        let mut hasher = Sha1::new();
                         let chunks = task.mmap.chunks(task.config.chunkerType.getSize());
+                        let hasher = task.hasherFactory.createHasher();
 
                         for chunk in chunks {
-                            hasher.update(chunk);
-
-                            let hash = hasher.finalize_reset();
+                            let hash = hasher.hash(chunk);
                             if !hashSet.insert(hash) {
                                 localDupCount += 1;
                             }
@@ -72,6 +69,7 @@ fn spawnWorkers(
                             globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
                             break;
                         }
+                        // TODO: Tune the sleep time for best performance
                         std::thread::sleep(Duration::from_millis(100));
                     }
                 }
@@ -83,7 +81,10 @@ fn spawnWorkers(
 }
 
 pub fn run(args: &TraceArgs) -> Result<()> {
+    // TODO: This now treats every (file, chunker) combination as a single task, but we want to
+    // split large files into multiple tasks to get balanced threads.
     let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
+    let hasherFactory: Arc<HasherFactory> = Arc::new(HasherFactory::new(args.hashType));
     let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
     let hashSet = Arc::new(DashSet::new());
     let dupCount = Arc::new(AtomicUsize::new(0));
@@ -109,16 +110,16 @@ pub fn run(args: &TraceArgs) -> Result<()> {
                 mmap: Arc::new(mmap),
                 offset,
                 length,
+                hasherFactory: Arc::clone(&hasherFactory),
                 config: ChunkerConfig {
                     chunkerType: chunker.clone(),
-                    hashType: args.digestType,
+                    hashType: args.hashType,
                     hashSalt: args.hashSalt.clone(),
                 },
             };
 
-            match queue.push(task) {
-                Ok(_) => (),
-                Err(_) => eprintln!("Failed to add task to queue - queue is full!"),
+            if let Err(_) = queue.push(task) {
+                eprintln!("Failed to add task to queue - queue is full!");
             }
         }
     }
