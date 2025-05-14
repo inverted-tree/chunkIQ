@@ -123,7 +123,7 @@ pub struct TraceArgs {
         name = "HASH_SALT",
         help = "Initialize the hashing function with this salt"
     )]
-    pub hashSalt: Option<String>,
+    pub hashSalt: Option<Box<str>>,
 
     #[arg(
         short = 's',

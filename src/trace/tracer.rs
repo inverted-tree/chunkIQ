@@ -1,17 +1,15 @@
-use crate::chunker;
+use crate::chunker::chunker::ChunkFactory;
 use crate::trace::hashers::HasherFactory;
 
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashSet;
 use memmap2::Mmap;
 
-use crate::chunker::chunker::ChunkerType;
-use crate::util::arguments::{HashType, TraceArgs};
+use crate::util::arguments::TraceArgs;
 
 use std::{
     fs::File,
     io::Result,
-    string::String,
     sync::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
@@ -20,19 +18,12 @@ use std::{
     time::Duration,
 };
 
-#[derive(Clone)]
-struct ChunkerConfig {
-    chunkerType: ChunkerType,
-    hashType: HashType,
-    hashSalt: Option<String>,
-}
-
 struct ChunkingTask {
     mmap: Arc<Mmap>,
     offset: usize,
     length: usize,
     hasherFactory: Arc<HasherFactory>,
-    config: ChunkerConfig,
+    chunkFactory: Arc<ChunkFactory>,
 }
 
 fn spawnWorkers(
@@ -55,7 +46,7 @@ fn spawnWorkers(
             loop {
                 match queue.pop() {
                     Some(task) => {
-                        let chunks = task.mmap.chunks(task.config.chunkerType.getSize());
+                        let chunks = task.chunkFactory.createChunker().chunk(task.mmap.as_ref());
                         let hasher = task.hasherFactory.createHasher();
 
                         for chunk in chunks {
@@ -104,6 +95,9 @@ pub fn run(args: &TraceArgs) -> Result<()> {
             let file = File::open(fileName)?;
             let mmap = unsafe { Mmap::map(&file)? };
 
+            let chunkFactory: Arc<ChunkFactory> =
+                Arc::new(ChunkFactory::new(chunker.clone(), args.hashSalt.clone()));
+
             let offset: usize = 0;
             let length: usize = 0;
 
@@ -112,11 +106,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
                 offset,
                 length,
                 hasherFactory: Arc::clone(&hasherFactory),
-                config: ChunkerConfig {
-                    chunkerType: chunker.clone(),
-                    hashType: args.hashType,
-                    hashSalt: args.hashSalt.clone(),
-                },
+                chunkFactory: Arc::clone(&chunkFactory),
             };
 
             if let Err(_) = queue.push(task) {
