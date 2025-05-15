@@ -4,9 +4,12 @@
 </div>
 
 <div align="center">
-  <a href="https://github.com/inverted-tree/chunkIQ/actions/workflows/ci.yml">
-    <img src="https://github.com/inverted-tree/chunkIQ/actions/workflows/ci.yml/badge.svg" alt="CI Status">
-  </a>
+    <a href="https://github.com/inverted-tree/chunkIQ/actions/workflows/test.yml">
+        <img src="https://github.com/inverted-tree/chunkIQ/actions/workflows/test.yml/badge.svg" alt="CI Status" style="padding: 16px;">
+    </a>
+    <a href="https://codecov.io/gh/inverted-tree/chunkIQ">
+      <img src="https://codecov.io/gh/inverted-tree/chunkIQ/branch/main/graph/badge.svg" alt="Code Coverage" style="padding: 16px;"/>
+    </a>
 </div>
 
 # Installation

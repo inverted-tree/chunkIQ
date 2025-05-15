@@ -1,0 +1,25 @@
+name: Test Coverage
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  coverage:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install tarpaulin
+        run: cargo install cargo-tarpaulin
+
+      - name: Generate code coverage report
+        run: cargo tarpaulin --out Xml --output-dir .
+
+      - name: Upload to codecov.io
+        uses: codecov/codecov-action@v4
+        with:
+          files: tarpaulin-report.xml
