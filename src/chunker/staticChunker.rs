@@ -27,9 +27,8 @@ mod tests {
     use std::io::Write;
     use tempfile::tempfile;
 
-    #[test]
-    fn testStaticChunker() {
-        let types = vec![
+    fn createTestTypes() -> Vec<ChunkerType> {
+        vec![
             ChunkerType::SC1K,
             ChunkerType::SC2K,
             ChunkerType::SC4K,
@@ -37,14 +36,23 @@ mod tests {
             ChunkerType::SC16K,
             ChunkerType::SC32K,
             ChunkerType::SC64K,
-        ];
+        ]
+    }
 
+    fn createTestData(N: usize) -> Mmap {
+        let mut file = tempfile().unwrap();
+        file.write_all(&vec![0u8; N * 1024]).unwrap();
+        let mmap = unsafe { Mmap::map(&file).unwrap() };
+
+        mmap
+    }
+
+    #[test]
+    fn testStaticChunker() {
+        let types = createTestTypes();
         for c in types {
-            let N = 64;
-
-            let mut file = tempfile().unwrap();
-            file.write_all(&vec![0u8; N * 1024]).unwrap();
-            let mmap = unsafe { Mmap::map(&file).unwrap() };
+            let N = 128;
+            let mmap = createTestData(N);
 
             let chunker = StaticChunker::new(ChunkerType::getSize(&c));
             let mut chunks = chunker.chunk(&mmap);
@@ -60,22 +68,11 @@ mod tests {
 
     #[test]
     fn testStaticChunkerFactory() {
-        let types = vec![
-            ChunkerType::SC1K,
-            ChunkerType::SC2K,
-            ChunkerType::SC4K,
-            ChunkerType::SC8K,
-            ChunkerType::SC16K,
-            ChunkerType::SC32K,
-            ChunkerType::SC64K,
-        ];
+        let types = createTestTypes();
 
         for c in types {
-            let N = 64;
-
-            let mut file = tempfile().unwrap();
-            file.write_all(&vec![0u8; N * 1024]).unwrap();
-            let mmap = unsafe { Mmap::map(&file).unwrap() };
+            let N = 128;
+            let mmap = createTestData(N);
 
             let factory = ChunkFactory::new(c, None);
             let chunker = factory.createChunker();

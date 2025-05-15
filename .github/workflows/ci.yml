@@ -1,4 +1,4 @@
-name: Rust Check
+name: Rust Test
 
 on:
   push:
@@ -7,14 +7,18 @@ on:
     branches: [ main ]
 
 jobs:
-  check:
+  build:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
+        BUILD_TARGET: [release]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check project
-        run: cargo check
+      - name: Build binaries in "${{ matrix.BUILD_TARGET }}" mode
+        run: cargo test --profile ${{ matrix.BUILD_TARGET }}
+
+      # - name: Check project
+      #   run: cargo check
