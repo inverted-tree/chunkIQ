@@ -45,3 +45,16 @@ To automate duplicate discovery you may register the trace mode as a Cronjob on 
 > [!WARNING]
 > This mode is not yet implemented.
 
+# Contributing
+If you want to contribute to this project, take a look at the TODOs which I've left inside the source files. You can list them all with
+```sh
+grep -rn --include "*.rs" "TODO:" . | awk '{$1=$1};1'
+```
+
+Feel free to make a PR for any of these enhancements. For anything else please open a feature request first, so we can discuss if your idea makes sense in the context of this project.
+
+> [!NOTE]
+> The following standards are a requirement to getting your contributions merged:
+> - All submitted code must be properly formatted with the rustfmt defaults.
+> - All submitted code must include a reasonable amount of unit tests inside the source file (sometimes less is more but nothing is still nothing).
+
