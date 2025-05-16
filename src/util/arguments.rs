@@ -1,6 +1,6 @@
 use crate::chunker::chunker::ChunkerType;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::{path::PathBuf, usize};
+use std::{fs::read_to_string, path::PathBuf, usize};
 
 #[derive(Parser)]
 #[command(
@@ -140,6 +140,15 @@ impl TraceArgs {
     pub fn validate(&mut self) -> Result<(), String> {
         if self.chunkerTypes.is_empty() {
             self.chunkerTypes.push(ChunkerType::CDC8K);
+        }
+        if self.fileIsListing {
+            self.fileNames = crate::util::fileIO::parseFileListings(
+                self.fileNames.clone(),
+                self.followSymlinks,
+            )?;
+        } else {
+            self.fileNames =
+                crate::util::fileIO::parseFiles(self.fileNames.clone(), self.followSymlinks)?;
         }
         self.jobs
             .get_or_insert(std::thread::available_parallelism().unwrap().get());
