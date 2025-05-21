@@ -58,3 +58,8 @@ Feel free to make a PR for any of these enhancements. For anything else please o
 > - All submitted code must be properly formatted with the rustfmt defaults.
 > - All submitted code must include a reasonable amount of unit tests inside the source file (sometimes less is more but nothing is still nothing).
 
+---
+
+> [!NOTE]
+> This project is based on [a Scala 2 implementation](https://github.com/dmeister/fs-c/tree/master) which is no longer maintained and relies on deprecated dependencies. This Rust implementation aims to offer improved usability and performance and avoids the deprecated dependencies issue.
+
