@@ -1,6 +1,6 @@
 use crate::chunker::chunker::ChunkerType;
 use clap::{Parser, Subcommand, ValueEnum};
-use std::{fs::read_to_string, path::PathBuf, usize};
+use std::{path::PathBuf, usize};
 
 #[derive(Parser)]
 #[command(

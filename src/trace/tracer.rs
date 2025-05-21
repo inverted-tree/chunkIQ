@@ -19,9 +19,9 @@ use std::{
 };
 
 struct ChunkingTask {
-    mmap: Arc<Mmap>,
-    offset: usize,
-    length: usize,
+    mmap: Mmap,
+    _offset: usize,
+    _length: usize,
     hasherFactory: Arc<HasherFactory>,
     chunkFactory: Arc<ChunkFactory>,
 }
@@ -30,6 +30,7 @@ fn spawnWorkers(
     numWorkers: usize,
     queue: Arc<ArrayQueue<ChunkingTask>>,
     hashSet: Arc<DashSet<Vec<u8>>>,
+    globalChunkCount: Arc<AtomicUsize>,
     globalDupCount: Arc<AtomicUsize>,
     isDone: Arc<AtomicBool>,
 ) -> Vec<thread::JoinHandle<()>> {
@@ -38,18 +39,21 @@ fn spawnWorkers(
     for _workerIdx in 0..numWorkers {
         let queue = Arc::clone(&queue);
         let hashSet = Arc::clone(&hashSet);
+        let globalChunkCount = Arc::clone(&globalChunkCount);
         let globalDupCount = Arc::clone(&globalDupCount);
         let isDone = Arc::clone(&isDone);
 
         let handle = thread::spawn(move || {
+            let mut localChunkCount: usize = 0;
             let mut localDupCount: usize = 0;
             loop {
                 match queue.pop() {
                     Some(task) => {
-                        let chunks = task.chunkFactory.createChunker().chunk(task.mmap.as_ref());
+                        let chunks = task.chunkFactory.createChunker().chunk(&task.mmap);
                         let hasher = task.hasherFactory.createHasher();
 
                         for chunk in chunks {
+                            localChunkCount += 1;
                             let hash = hasher.hash(chunk);
                             if !hashSet.insert(hash) {
                                 localDupCount += 1;
@@ -58,6 +62,7 @@ fn spawnWorkers(
                     }
                     None => {
                         if isDone.load(Ordering::Relaxed) {
+                            globalChunkCount.fetch_add(localChunkCount, Ordering::Relaxed);
                             globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
                             break;
                         }
@@ -79,6 +84,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let hasherFactory: Arc<HasherFactory> = Arc::new(HasherFactory::new(args.hashType));
     let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
     let hashSet = Arc::new(DashSet::new());
+    let chunkCount = Arc::new(AtomicUsize::new(0));
     let dupCount = Arc::new(AtomicUsize::new(0));
     let isDone = Arc::new(AtomicBool::new(false));
 
@@ -86,6 +92,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         args.jobs.unwrap_or(1),
         Arc::clone(&queue),
         Arc::clone(&hashSet),
+        Arc::clone(&chunkCount),
         Arc::clone(&dupCount),
         Arc::clone(&isDone),
     );
@@ -95,16 +102,15 @@ pub fn run(args: &TraceArgs) -> Result<()> {
             let file = File::open(fileName)?;
             let mmap = unsafe { Mmap::map(&file)? };
 
-            let chunkFactory: Arc<ChunkFactory> =
-                Arc::new(ChunkFactory::new(chunker.clone(), args.hashSalt.clone()));
+            let chunkFactory: Arc<ChunkFactory> = Arc::new(ChunkFactory::new(chunker.clone()));
 
             let offset: usize = 0;
             let length: usize = 0;
 
             let task = ChunkingTask {
-                mmap: Arc::new(mmap),
-                offset,
-                length,
+                mmap: mmap,
+                _offset: offset,
+                _length: length,
                 hasherFactory: Arc::clone(&hasherFactory),
                 chunkFactory: Arc::clone(&chunkFactory),
             };
@@ -122,8 +128,9 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         }
     }
     println!(
-        "Found a total of {} duplicate chunks which accounts to {}KiB.",
+        "Found a total of {} duplicate chunks out of a total of {} chunks which accounts to {}KiB.",
         dupCount.load(Ordering::Relaxed),
+        chunkCount.load(Ordering::Relaxed),
         dupCount.load(Ordering::Relaxed) * args.chunkerTypes[0].getSize() >> 10
     );
 

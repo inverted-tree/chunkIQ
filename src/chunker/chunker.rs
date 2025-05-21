@@ -1,10 +1,16 @@
-use crate::chunker::dynamicChunker::DynamicChunker;
 use crate::chunker::fileChunker::FileChunker;
+use crate::chunker::rabinChunker::RabinChunker;
 use crate::chunker::staticChunker::StaticChunker;
-use std::slice::Chunks;
 
 use clap::ValueEnum;
 use memmap2::Mmap;
+
+#[derive(Debug, Clone, Copy)]
+pub enum ChunkingScheme {
+    FILE,
+    STATIC,
+    CONTENT,
+}
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum ChunkerType {
@@ -45,42 +51,46 @@ impl ChunkerType {
             ChunkerType::CDC64K => 1 << 16,
         }
     }
-}
 
-pub trait Chunker {
-    fn chunk<'a>(&self, mmap: &'a Mmap) -> Chunks<'a, u8>;
-}
-
-pub struct ChunkFactory {
-    t: ChunkerType,
-    s: Option<Box<str>>,
-}
-
-impl ChunkFactory {
-    pub fn new(chunkerType: ChunkerType, salt: Option<Box<str>>) -> Self {
-        Self {
-            t: chunkerType,
-            s: salt,
-        }
-    }
-
-    pub fn createChunker(&self) -> Box<dyn Chunker> {
-        match self.t {
-            ChunkerType::FILE => Box::new(FileChunker::new()),
+    pub fn getScheme(&self) -> ChunkingScheme {
+        match self {
+            ChunkerType::FILE => ChunkingScheme::FILE,
             ChunkerType::SC1K
             | ChunkerType::SC2K
             | ChunkerType::SC4K
             | ChunkerType::SC8K
             | ChunkerType::SC16K
             | ChunkerType::SC32K
-            | ChunkerType::SC64K => Box::new(StaticChunker::new(ChunkerType::getSize(&self.t))),
+            | ChunkerType::SC64K => ChunkingScheme::STATIC,
             ChunkerType::CDC1K
             | ChunkerType::CDC2K
             | ChunkerType::CDC4K
             | ChunkerType::CDC8K
             | ChunkerType::CDC16K
             | ChunkerType::CDC32K
-            | ChunkerType::CDC64K => Box::new(DynamicChunker::new(ChunkerType::getSize(&self.t))),
+            | ChunkerType::CDC64K => ChunkingScheme::CONTENT,
+        }
+    }
+}
+
+pub trait Chunker {
+    fn chunk<'a>(&self, mmap: &'a Mmap) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
+}
+
+pub struct ChunkFactory {
+    t: ChunkerType,
+}
+
+impl ChunkFactory {
+    pub fn new(chunkerType: ChunkerType) -> Self {
+        Self { t: chunkerType }
+    }
+
+    pub fn createChunker(&self) -> Box<dyn Chunker> {
+        match self.t.getScheme() {
+            ChunkingScheme::FILE => Box::new(FileChunker::new()),
+            ChunkingScheme::STATIC => Box::new(StaticChunker::new(self.t.getSize())),
+            ChunkingScheme::CONTENT => Box::new(RabinChunker::<64>::new(self.t.getSize())),
         }
     }
 }

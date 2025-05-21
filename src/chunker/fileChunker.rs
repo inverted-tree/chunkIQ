@@ -1,6 +1,5 @@
 use crate::chunker::chunker::Chunker;
 use memmap2::Mmap;
-use std::slice::Chunks;
 
 pub struct FileChunker {}
 
@@ -11,8 +10,9 @@ impl FileChunker {
 }
 
 impl Chunker for FileChunker {
-    fn chunk<'a>(&self, mmap: &'a Mmap) -> Chunks<'a, u8> {
-        (&mmap[..]).chunks(mmap.len())
+    fn chunk<'a>(&self, mmap: &'a Mmap) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
+        let fileSize = mmap.len();
+        Box::new(mmap.chunks(fileSize))
     }
 }
 
@@ -49,8 +49,9 @@ mod tests {
     fn testFileChunkerFactory() {
         let (data, mmap) = generateTestData();
 
-        let factory = ChunkFactory::new(ChunkerType::FILE, None);
+        let factory = ChunkFactory::new(ChunkerType::FILE);
         let chunker = factory.createChunker();
+
         let mut chunks = chunker.chunk(&mmap);
 
         assert_eq!(chunks.next(), Some(data.as_bytes()));
