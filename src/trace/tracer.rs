@@ -1,6 +1,7 @@
 use crate::chunker::chunker::ChunkFactory;
 use crate::trace::hashers::HasherFactory;
 
+use crate::tui::tui;
 use crossbeam::queue::ArrayQueue;
 use dashmap::DashSet;
 use memmap2::Mmap;
@@ -18,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-struct ChunkingTask {
+pub struct ChunkingTask {
     mmap: Mmap,
     _offset: usize,
     _length: usize,
@@ -97,6 +98,14 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         Arc::clone(&isDone),
     );
 
+    let tuiHandle = {
+        let queue = Arc::clone(&queue);
+        let isDone = Arc::clone(&isDone);
+        thread::spawn(move || {
+            tui::initAndRunTrace(numTasks, queue, isDone);
+        })
+    };
+
     for fileName in &args.fileNames {
         for chunker in &args.chunkerTypes {
             let file = File::open(fileName)?;
@@ -127,6 +136,8 @@ pub fn run(args: &TraceArgs) -> Result<()> {
             eprintln!("Error joining worker thread {}: {:?}", i, e);
         }
     }
+    tuiHandle.join().unwrap();
+
     println!(
         "Found a total of {} duplicate chunks out of a total of {} chunks which accounts to {}KiB.",
         dupCount.load(Ordering::Relaxed),

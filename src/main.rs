@@ -3,10 +3,13 @@
 mod chunker;
 mod parse;
 mod trace;
+mod tui;
 mod util;
 
 use crate::util::arguments::{Cli, Commands};
 use clap::Parser;
+use parse::parser;
+use trace::tracer;
 
 fn main() {
     let cli: Cli = Cli::parse();
@@ -18,7 +21,7 @@ fn main() {
                 return;
             }
 
-            parse::parser::run(&args);
+            parser::run(&args);
         }
 
         Commands::Trace(mut args) => {
@@ -27,7 +30,7 @@ fn main() {
                 return;
             }
 
-            if let Err(e) = trace::tracer::run(&args) {
+            if let Err(e) = tracer::run(&args) {
                 eprintln!("[Error] {}", e);
                 return;
             }
