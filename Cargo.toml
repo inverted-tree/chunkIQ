@@ -6,9 +6,11 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.5.35", features = ["derive"] }
 crossbeam = { version = "0.8.4" }
+crossbeam-channel = "0.5.13"
 crossterm = "0.29.0"
 dashmap = "6.1.0"
 digest = "0.10.7"
+fastcdc = "1.0"
 md-5 = "0.10.6"
 memmap2 = "0.9.5"
 ratatui = "0.29.0"

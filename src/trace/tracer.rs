@@ -1,14 +1,15 @@
 use crate::chunker::chunker::ChunkFactory;
 use crate::trace::hashers::HasherFactory;
 
-use crate::tui::tui;
-use crossbeam::queue::ArrayQueue;
-use dashmap::DashSet;
+// use crate::tui::tui;
+use crossbeam_channel::{bounded, Receiver};
+use dashmap::{DashMap, DashSet};
 use memmap2::Mmap;
 
 use crate::util::arguments::TraceArgs;
 
 use std::{
+    cmp::min,
     fs::File,
     io::Result,
     sync::{
@@ -16,119 +17,136 @@ use std::{
         Arc,
     },
     thread,
-    time::Duration,
 };
 
+const WORK_UNIT_SIZE: usize = 64 * 1024 * 1024; // 64 MiB
+
 pub struct ChunkingTask {
-    mmap: Mmap,
-    _offset: usize,
-    _length: usize,
+    mmap: Arc<Mmap>,
+    offset: usize,
+    length: usize,
+    fileName: String,
     hasherFactory: Arc<HasherFactory>,
     chunkFactory: Arc<ChunkFactory>,
 }
 
 fn spawnWorkers(
     numWorkers: usize,
-    queue: Arc<ArrayQueue<ChunkingTask>>,
+    receiver: Receiver<ChunkingTask>,
     hashSet: Arc<DashSet<Vec<u8>>>,
+    fileStats: Arc<DashMap<String, bool>>,
     globalChunkCount: Arc<AtomicUsize>,
     globalDupCount: Arc<AtomicUsize>,
-    isDone: Arc<AtomicBool>,
+    globalDupSize: Arc<AtomicUsize>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(numWorkers);
 
     for _workerIdx in 0..numWorkers {
-        let queue = Arc::clone(&queue);
+        let receiver = receiver.clone();
         let hashSet = Arc::clone(&hashSet);
+        let fileStats = Arc::clone(&fileStats);
         let globalChunkCount = Arc::clone(&globalChunkCount);
         let globalDupCount = Arc::clone(&globalDupCount);
-        let isDone = Arc::clone(&isDone);
+        let globalDupSize = Arc::clone(&globalDupSize);
 
         let handle = thread::spawn(move || {
             let mut localChunkCount: usize = 0;
             let mut localDupCount: usize = 0;
-            loop {
-                match queue.pop() {
-                    Some(task) => {
-                        let chunks = task.chunkFactory.createChunker().chunk(&task.mmap);
-                        let hasher = task.hasherFactory.createHasher();
+            let mut localDupSize: usize = 0;
 
-                        for chunk in chunks {
-                            localChunkCount += 1;
-                            let hash = hasher.hash(chunk);
-                            if !hashSet.insert(hash) {
-                                localDupCount += 1;
-                            }
-                        }
-                    }
-                    None => {
-                        if isDone.load(Ordering::Relaxed) {
-                            globalChunkCount.fetch_add(localChunkCount, Ordering::Relaxed);
-                            globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
-                            break;
-                        }
-                        // TODO: Tune the sleep time for best performance
-                        std::thread::sleep(Duration::from_millis(100));
+            while let Ok(task) = receiver.recv() {
+                let fileContent = &task.mmap[task.offset..task.offset + task.length];
+                let chunks = task.chunkFactory.createChunker().chunk(fileContent);
+                let hasher = task.hasherFactory.createHasher();
+
+                for chunk in chunks {
+                    localChunkCount += 1;
+                    let hash = hasher.hash(chunk);
+                    if !hashSet.insert(hash) {
+                        localDupCount += 1;
+                        localDupSize += chunk.len();
                     }
                 }
+
+                if task.mmap.len() == task.offset + task.length {
+                    fileStats
+                        .entry(task.fileName.clone())
+                        .and_modify(|v| *v = true)
+                        .or_insert(true);
+                }
             }
+
+            globalChunkCount.fetch_add(localChunkCount, Ordering::Relaxed);
+            globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
+            globalDupSize.fetch_add(localDupSize, Ordering::Relaxed);
         });
         handles.push(handle);
     }
+
     handles
 }
 
 pub fn run(args: &TraceArgs) -> Result<()> {
-    // TODO: This now treats every (file, chunker) combination as a single task, but we want to
-    // split large files into multiple tasks to get balanced threads.
-    let numTasks: usize = args.fileNames.len() * args.chunkerTypes.len();
+    let mut tasks: Vec<ChunkingTask> = Vec::new();
     let hasherFactory: Arc<HasherFactory> = Arc::new(HasherFactory::new(args.hashType));
-    let queue: Arc<ArrayQueue<ChunkingTask>> = Arc::new(ArrayQueue::new(numTasks));
+    let fileStats: Arc<DashMap<String, bool>> = Arc::new(DashMap::new());
+
+    for filename in &args.fileNames {
+        let file = File::open(filename)?;
+        let mmap = Arc::new(unsafe { Mmap::map(&file)? });
+        let fileLength = mmap.len();
+        let fname: String = filename.to_string_lossy().into_owned();
+
+        let chunkFactory: Arc<ChunkFactory> = Arc::new(ChunkFactory::new(args.chunkerType.clone()));
+
+        let mut offset = 0;
+        while offset < fileLength {
+            let length = min(WORK_UNIT_SIZE, fileLength - offset);
+            tasks.push(ChunkingTask {
+                mmap: Arc::clone(&mmap),
+                offset,
+                length,
+                fileName: fname.clone(),
+                hasherFactory: Arc::clone(&hasherFactory),
+                chunkFactory: Arc::clone(&chunkFactory),
+            });
+            offset += length;
+        }
+
+        fileStats.insert(fname.clone(), false);
+    }
+
+    let numTasks = tasks.len();
+    let (sender, receiver) = bounded(numTasks);
     let hashSet = Arc::new(DashSet::new());
     let chunkCount = Arc::new(AtomicUsize::new(0));
     let dupCount = Arc::new(AtomicUsize::new(0));
+    let dupSize = Arc::new(AtomicUsize::new(0));
     let isDone = Arc::new(AtomicBool::new(false));
 
     let workers = spawnWorkers(
         args.jobs.unwrap_or(1),
-        Arc::clone(&queue),
+        receiver.clone(),
         Arc::clone(&hashSet),
+        Arc::clone(&fileStats),
         Arc::clone(&chunkCount),
         Arc::clone(&dupCount),
-        Arc::clone(&isDone),
+        Arc::clone(&dupSize),
     );
 
-    let tuiHandle = {
-        let queue = Arc::clone(&queue);
-        let isDone = Arc::clone(&isDone);
-        thread::spawn(move || {
-            tui::initAndRunTrace(numTasks, queue, isDone);
-        })
-    };
+    // let tuiHandle = {
+    //     let receiver = receiver.clone();
+    //     let isDone = Arc::clone(&isDone);
+    //     let fileStats = Arc::clone(&fileStats);
+    //     thread::spawn(move || {
+    //         tui::initAndRunTrace(numTasks, receiver, isDone, fileStats);
+    //     })
+    // };
 
-    for fileName in &args.fileNames {
-        for chunker in &args.chunkerTypes {
-            let file = File::open(fileName)?;
-            let mmap = unsafe { Mmap::map(&file)? };
-
-            let chunkFactory: Arc<ChunkFactory> = Arc::new(ChunkFactory::new(chunker.clone()));
-
-            let offset: usize = 0;
-            let length: usize = 0;
-
-            let task = ChunkingTask {
-                mmap: mmap,
-                _offset: offset,
-                _length: length,
-                hasherFactory: Arc::clone(&hasherFactory),
-                chunkFactory: Arc::clone(&chunkFactory),
-            };
-
-            if let Err(_) = queue.push(task) {
-                eprintln!("Failed to add task to queue - queue is full!");
-            }
-        }
+    for task in tasks {
+        sender.send(task).unwrap();
     }
+    drop(sender);
     isDone.store(true, Ordering::Relaxed);
 
     for (i, worker) in workers.into_iter().enumerate() {
@@ -136,13 +154,13 @@ pub fn run(args: &TraceArgs) -> Result<()> {
             eprintln!("Error joining worker thread {}: {:?}", i, e);
         }
     }
-    tuiHandle.join().unwrap();
+    // tuiHandle.join().unwrap();
 
     println!(
         "Found a total of {} duplicate chunks out of a total of {} chunks which accounts to {}KiB.",
         dupCount.load(Ordering::Relaxed),
         chunkCount.load(Ordering::Relaxed),
-        dupCount.load(Ordering::Relaxed) * args.chunkerTypes[0].getSize() >> 10
+        dupSize.load(Ordering::Relaxed) >> 10
     );
 
     Ok(())

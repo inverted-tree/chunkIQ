@@ -1,5 +1,4 @@
 use crate::chunker::chunker::Chunker;
-use memmap2::Mmap;
 
 pub struct FileChunker {}
 
@@ -10,9 +9,9 @@ impl FileChunker {
 }
 
 impl Chunker for FileChunker {
-    fn chunk<'a>(&self, mmap: &'a Mmap) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
-        let fileSize = mmap.len();
-        Box::new(mmap.chunks(fileSize))
+    fn chunk<'a>(&self, data: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
+        let fileSize = data.len();
+        Box::new(data.chunks(fileSize))
     }
 }
 

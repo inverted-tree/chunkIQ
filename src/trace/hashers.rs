@@ -5,7 +5,7 @@ use sha1::Sha1;
 use sha2::Sha256;
 
 pub trait Hasher {
-    // TODO: Benchmark performance loss by using heap memory
+    // TODO: Benchmark performance loss caused by using heap memory
     fn hash(&self, chunk: &[u8]) -> Vec<u8>;
 }
 

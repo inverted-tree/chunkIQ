@@ -40,9 +40,10 @@ pub struct TraceArgs {
         short = 'c',
         long = "chunker",
         help = "Specify the chunking method (default = CDC8K)",
-        value_enum
+        value_enum,
+        default_value_t = ChunkerType::CDC8K
     )]
-    pub chunkerTypes: Vec<ChunkerType>,
+    pub chunkerType: ChunkerType,
 
     #[arg(
         short = 'd',
@@ -138,9 +139,6 @@ pub struct TraceArgs {
 
 impl TraceArgs {
     pub fn validate(&mut self) -> Result<(), String> {
-        if self.chunkerTypes.is_empty() {
-            self.chunkerTypes.push(ChunkerType::CDC8K);
-        }
         if self.fileIsListing {
             self.fileNames = crate::util::fileIO::parseFileListings(
                 self.fileNames.clone(),
@@ -157,7 +155,7 @@ impl TraceArgs {
                 return Err(format!("Progress File {:?} does not exist", file));
             }
         }
-        let ref files = self.fileNames;
+        let files = &self.fileNames;
         for file in files {
             if !file.exists() {
                 return Err(format!("Input file {:?} does not exist", file));

@@ -1,5 +1,4 @@
 use crate::chunker::chunker::Chunker;
-use memmap2::Mmap;
 
 pub struct StaticChunker {
     size: usize,
@@ -12,9 +11,9 @@ impl StaticChunker {
 }
 
 impl Chunker for StaticChunker {
-    fn chunk<'a>(&self, mmap: &'a Mmap) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
+    fn chunk<'a>(&self, data: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
         let chunkSize = self.size;
-        Box::new(mmap.chunks(chunkSize))
+        Box::new(data.chunks(chunkSize))
     }
 }
 

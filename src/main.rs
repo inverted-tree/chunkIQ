@@ -1,4 +1,4 @@
-#![allow(non_snake_case)] // deal with it
+#![allow(non_snake_case)]
 
 mod chunker;
 mod parse;
@@ -34,6 +34,8 @@ fn main() {
                 eprintln!("[Error] {}", e);
                 return;
             }
+            // let (numTasks, receiver, isDone, file_stats_map) = tracer::run(&args).unwrap();
+            // initAndRunTrace(numTasks, receiver, isDone, file_stats_map);
         }
     }
 }

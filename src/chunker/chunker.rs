@@ -1,9 +1,8 @@
-use crate::chunker::fileChunker::FileChunker;
-use crate::chunker::rabinChunker::RabinChunker;
-use crate::chunker::staticChunker::StaticChunker;
+use crate::chunker::{
+    fileChunker::FileChunker, rabinChunker::RabinChunker, staticChunker::StaticChunker,
+};
 
 use clap::ValueEnum;
-use memmap2::Mmap;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ChunkingScheme {
@@ -74,7 +73,7 @@ impl ChunkerType {
 }
 
 pub trait Chunker {
-    fn chunk<'a>(&self, mmap: &'a Mmap) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
+    fn chunk<'a>(&self, data: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
 }
 
 pub struct ChunkFactory {
@@ -90,7 +89,7 @@ impl ChunkFactory {
         match self.t.getScheme() {
             ChunkingScheme::FILE => Box::new(FileChunker::new()),
             ChunkingScheme::STATIC => Box::new(StaticChunker::new(self.t.getSize())),
-            ChunkingScheme::CONTENT => Box::new(RabinChunker::<64>::new(self.t.getSize())),
+            ChunkingScheme::CONTENT => Box::new(RabinChunker::new(self.t.getSize())),
         }
     }
 }
