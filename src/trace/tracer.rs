@@ -33,7 +33,7 @@ pub struct ChunkingTask {
 fn spawnWorkers(
     numWorkers: usize,
     receiver: Receiver<ChunkingTask>,
-    hashSet: Arc<DashSet<Vec<u8>>>,
+    hashSet: Arc<DashSet<[u8; 32]>>,
     fileStats: Arc<DashMap<String, FileStatus>>,
     completedTasks: Arc<AtomicUsize>,
     globalChunkCount: Arc<AtomicUsize>,
@@ -132,7 +132,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let numWorkers = args.jobs.unwrap_or(1);
 
     let (sender, receiver) = bounded(numTasks);
-    let hashSet = Arc::new(DashSet::new());
+    let hashSet: Arc<DashSet<[u8; 32]>> = Arc::new(DashSet::new());
     let completedTasks = Arc::new(AtomicUsize::new(0));
     let chunkCount = Arc::new(AtomicUsize::new(0));
     let dupCount = Arc::new(AtomicUsize::new(0));
