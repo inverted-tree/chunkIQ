@@ -1,7 +1,7 @@
 use crate::chunker::chunker::ChunkFactory;
 use crate::trace::hashers::HasherFactory;
+use crate::tui::tui::{FileStatus, TraceUiState};
 
-// use crate::tui::tui;
 use crossbeam_channel::{bounded, Receiver};
 use dashmap::{DashMap, DashSet};
 use memmap2::Mmap;
@@ -34,30 +34,39 @@ fn spawnWorkers(
     numWorkers: usize,
     receiver: Receiver<ChunkingTask>,
     hashSet: Arc<DashSet<Vec<u8>>>,
-    fileStats: Arc<DashMap<String, bool>>,
+    fileStats: Arc<DashMap<String, FileStatus>>,
+    completedTasks: Arc<AtomicUsize>,
     globalChunkCount: Arc<AtomicUsize>,
     globalDupCount: Arc<AtomicUsize>,
     globalDupSize: Arc<AtomicUsize>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(numWorkers);
 
-    for _workerIdx in 0..numWorkers {
+    for _ in 0..numWorkers {
         let receiver = receiver.clone();
         let hashSet = Arc::clone(&hashSet);
         let fileStats = Arc::clone(&fileStats);
+        let completedTasks = Arc::clone(&completedTasks);
         let globalChunkCount = Arc::clone(&globalChunkCount);
         let globalDupCount = Arc::clone(&globalDupCount);
         let globalDupSize = Arc::clone(&globalDupSize);
 
         let handle = thread::spawn(move || {
-            let mut localChunkCount: usize = 0;
-            let mut localDupCount: usize = 0;
-            let mut localDupSize: usize = 0;
-
             while let Ok(task) = receiver.recv() {
+                // Mark file as in-progress on first task picked up for it
+                if let Some(mut s) = fileStats.get_mut(&task.fileName) {
+                    if matches!(*s, FileStatus::Queued) {
+                        *s = FileStatus::Processing;
+                    }
+                }
+
                 let fileContent = &task.mmap[task.offset..task.offset + task.length];
                 let chunks = task.chunkFactory.createChunker().chunk(fileContent);
                 let hasher = task.hasherFactory.createHasher();
+
+                let mut localChunkCount: usize = 0;
+                let mut localDupCount: usize = 0;
+                let mut localDupSize: usize = 0;
 
                 for chunk in chunks {
                     localChunkCount += 1;
@@ -68,17 +77,20 @@ fn spawnWorkers(
                     }
                 }
 
-                if task.mmap.len() == task.offset + task.length {
-                    fileStats
-                        .entry(task.fileName.clone())
-                        .and_modify(|v| *v = true)
-                        .or_insert(true);
-                }
-            }
+                // Flush per task (once per 64 MiB) so TUI stats stay live
+                globalChunkCount.fetch_add(localChunkCount, Ordering::Relaxed);
+                globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
+                globalDupSize.fetch_add(localDupSize, Ordering::Relaxed);
 
-            globalChunkCount.fetch_add(localChunkCount, Ordering::Relaxed);
-            globalDupCount.fetch_add(localDupCount, Ordering::Relaxed);
-            globalDupSize.fetch_add(localDupSize, Ordering::Relaxed);
+                // Mark file done when its last work unit completes
+                if task.mmap.len() == task.offset + task.length {
+                    if let Some(mut s) = fileStats.get_mut(&task.fileName) {
+                        *s = FileStatus::Done;
+                    }
+                }
+
+                completedTasks.fetch_add(1, Ordering::Relaxed);
+            }
         });
         handles.push(handle);
     }
@@ -89,14 +101,13 @@ fn spawnWorkers(
 pub fn run(args: &TraceArgs) -> Result<()> {
     let mut tasks: Vec<ChunkingTask> = Vec::new();
     let hasherFactory: Arc<HasherFactory> = Arc::new(HasherFactory::new(args.hashType));
-    let fileStats: Arc<DashMap<String, bool>> = Arc::new(DashMap::new());
+    let fileStats: Arc<DashMap<String, FileStatus>> = Arc::new(DashMap::new());
 
     for filename in &args.fileNames {
         let file = File::open(filename)?;
         let mmap = Arc::new(unsafe { Mmap::map(&file)? });
         let fileLength = mmap.len();
         let fname: String = filename.to_string_lossy().into_owned();
-
         let chunkFactory: Arc<ChunkFactory> = Arc::new(ChunkFactory::new(args.chunkerType.clone()));
 
         let mut offset = 0;
@@ -113,55 +124,96 @@ pub fn run(args: &TraceArgs) -> Result<()> {
             offset += length;
         }
 
-        fileStats.insert(fname.clone(), false);
+        fileStats.insert(fname, FileStatus::Queued);
     }
 
     let numTasks = tasks.len();
+    let numFiles = fileStats.len();
+    let numWorkers = args.jobs.unwrap_or(1);
+
     let (sender, receiver) = bounded(numTasks);
     let hashSet = Arc::new(DashSet::new());
+    let completedTasks = Arc::new(AtomicUsize::new(0));
     let chunkCount = Arc::new(AtomicUsize::new(0));
     let dupCount = Arc::new(AtomicUsize::new(0));
     let dupSize = Arc::new(AtomicUsize::new(0));
     let isDone = Arc::new(AtomicBool::new(false));
 
+    let uiState = Arc::new(TraceUiState {
+        totalTasks: numTasks,
+        totalFiles: numFiles,
+        completedTasks: Arc::clone(&completedTasks),
+        chunkCount: Arc::clone(&chunkCount),
+        dupCount: Arc::clone(&dupCount),
+        dupSize: Arc::clone(&dupSize),
+        fileStats: Arc::clone(&fileStats),
+        isDone: Arc::clone(&isDone),
+        chunkerLabel: format!("{:?}", args.chunkerType),
+        hasherLabel: format!("{:?}", args.hashType),
+        numWorkers,
+    });
+
+    let terminal = crate::tui::tui::init(numFiles);
+    let tuiHandle = {
+        let state = Arc::clone(&uiState);
+        thread::spawn(move || crate::tui::tui::run(terminal, state))
+    };
+
     let workers = spawnWorkers(
-        args.jobs.unwrap_or(1),
-        receiver.clone(),
+        numWorkers,
+        receiver,
         Arc::clone(&hashSet),
         Arc::clone(&fileStats),
+        Arc::clone(&completedTasks),
         Arc::clone(&chunkCount),
         Arc::clone(&dupCount),
         Arc::clone(&dupSize),
     );
 
-    // let tuiHandle = {
-    //     let receiver = receiver.clone();
-    //     let isDone = Arc::clone(&isDone);
-    //     let fileStats = Arc::clone(&fileStats);
-    //     thread::spawn(move || {
-    //         tui::initAndRunTrace(numTasks, receiver, isDone, fileStats);
-    //     })
-    // };
-
     for task in tasks {
         sender.send(task).unwrap();
     }
     drop(sender);
-    isDone.store(true, Ordering::Relaxed);
 
     for (i, worker) in workers.into_iter().enumerate() {
         if let Err(e) = worker.join() {
             eprintln!("Error joining worker thread {}: {:?}", i, e);
         }
     }
-    // tuiHandle.join().unwrap();
+
+    // All workers have finished — mark every file as Done before the final TUI draw.
+    // This handles edge cases like empty files that produced no tasks and never
+    // transitioned out of Queued.
+    for mut entry in fileStats.iter_mut() {
+        *entry.value_mut() = FileStatus::Done;
+    }
+
+    // Signal TUI after all workers finish so the final draw reflects accurate state
+    isDone.store(true, Ordering::Relaxed);
+    tuiHandle.join().unwrap();
 
     println!(
-        "Found a total of {} duplicate chunks out of a total of {} chunks which accounts to {}KiB.",
+        "Found {} duplicate chunks out of {} total ({} saved).",
         dupCount.load(Ordering::Relaxed),
         chunkCount.load(Ordering::Relaxed),
-        dupSize.load(Ordering::Relaxed) >> 10
+        fmtSize(dupSize.load(Ordering::Relaxed)),
     );
 
     Ok(())
+}
+
+fn fmtSize(bytes: usize) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.1} GiB", b / GIB)
+    } else if b >= MIB {
+        format!("{:.1} MiB", b / MIB)
+    } else if b >= KIB {
+        format!("{:.0} KiB", b / KIB)
+    } else {
+        format!("{} B", bytes)
+    }
 }
