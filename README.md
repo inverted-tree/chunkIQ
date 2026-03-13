@@ -46,20 +46,19 @@ To automate duplicate discovery you may register the trace mode as a Cronjob on 
 > This mode is not yet implemented.
 
 # Contributing
-If you want to contribute to this project, take a look at the TODOs which I've left inside the source files. You can list them all with
+If you want to contribute to this project, take a look at the `TODO`s inside the source files. You can list them all with
 ```sh
 grep -rn --include "*.rs" "TODO:" . | awk '{$1=$1};1'
 ```
 
-Feel free to make a PR for any of these enhancements. For anything else please open a feature request first, so we can discuss if your idea makes sense in the context of this project.
+Feel free to submit a PR for any of these enhancements. If you have any other ideas for this project, please open a feature request first, so we can discuss if your ideas align with the scope of this tool.
 
 > [!NOTE]
 > The following standards are a requirement to getting your contributions merged:
+> - All submitted code must include a reasonable amount of unit tests inside the source files (sometimes less is more but nothing is still nothing).
 > - All submitted code must be properly formatted with the rustfmt defaults.
-> - All submitted code must include a reasonable amount of unit tests inside the source file (sometimes less is more but nothing is still nothing).
 
 ---
 
 > [!NOTE]
-> This project is based on [a Scala 2 implementation](https://github.com/dmeister/fs-c/tree/master) which is no longer maintained and relies on deprecated dependencies. This Rust implementation aims to offer improved usability and performance and avoids the deprecated dependencies issue.
-
+> This project is based on [a Scala 2 implementation](https://github.com/dmeister/fs-c/tree/master) which is no longer maintained and relies on deprecated dependencies. This Rust implementation offers improved usability and performance with up-to-date dependencies.
