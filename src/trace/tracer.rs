@@ -104,6 +104,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let hasherFactory = Arc::new(HasherFactory::new(args.hashType));
     let chunkFactory = Arc::new(ChunkFactory::new(args.chunkerType));
     let fileStats: Arc<DashMap<String, FileStatus>> = Arc::new(DashMap::new());
+    let mut totalBytes: usize = 0;
 
     for filename in &args.fileNames {
         let file = File::open(filename)?;
@@ -112,6 +113,8 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         let mmap = Arc::new(mmap);
         let fileLength = mmap.len();
         let fname: String = filename.to_string_lossy().into_owned();
+
+        totalBytes += fileLength;
 
         let mut offset = 0;
         while offset < fileLength {
@@ -132,8 +135,17 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let numFiles = fileStats.len();
     let numWorkers = args.jobs.unwrap_or(1);
 
+    // Estimate unique chunk count to pre-size the hash set and avoid rehashing.
+    // For FILE chunking getSize() returns 0, so fall back to one slot per file.
+    let avgChunkSize = args.chunkerType.getSize();
+    let estimatedChunks = if avgChunkSize == 0 {
+        numFiles
+    } else {
+        (totalBytes / avgChunkSize).max(1)
+    };
+
     let (sender, receiver) = bounded(numWorkers * 4);
-    let hashSet: Arc<DashSet<[u8; 32]>> = Arc::new(DashSet::new());
+    let hashSet: Arc<DashSet<[u8; 32]>> = Arc::new(DashSet::with_capacity(estimatedChunks));
     let completedTasks = Arc::new(AtomicUsize::new(0));
     let chunkCount = Arc::new(AtomicUsize::new(0));
     let dupCount = Arc::new(AtomicUsize::new(0));
