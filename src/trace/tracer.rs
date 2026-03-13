@@ -55,6 +55,13 @@ fn spawnWorkers(
 
         let handle = thread::spawn(move || {
             while let Ok(task) = receiver.recv() {
+                // Prefetch the next work unit of this file while the CPU processes the current one
+                let nextOffset = task.offset + task.length;
+                if nextOffset < task.mmap.len() {
+                    let nextLen = min(WORK_UNIT_SIZE, task.mmap.len() - nextOffset);
+                    let _ = task.mmap.advise_range(Advice::WillNeed, nextOffset, nextLen);
+                }
+
                 // Mark file as in-progress on first task picked up for it
                 if let Some(mut s) = fileStats.get_mut(&task.fileName) {
                     if matches!(*s, FileStatus::Queued) {
