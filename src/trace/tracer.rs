@@ -132,7 +132,7 @@ pub fn run(args: &TraceArgs) -> Result<()> {
     let numFiles = fileStats.len();
     let numWorkers = args.jobs.unwrap_or(1);
 
-    let (sender, receiver) = bounded(numTasks);
+    let (sender, receiver) = bounded(numWorkers * 4);
     let hashSet: Arc<DashSet<[u8; 32]>> = Arc::new(DashSet::new());
     let completedTasks = Arc::new(AtomicUsize::new(0));
     let chunkCount = Arc::new(AtomicUsize::new(0));
