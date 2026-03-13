@@ -8,6 +8,13 @@ pub trait Hasher: Send {
     fn hash(&self, chunk: &[u8]) -> [u8; 32];
 }
 
+struct Blake3Hasher;
+impl Hasher for Blake3Hasher {
+    fn hash(&self, chunk: &[u8]) -> [u8; 32] {
+        *blake3::hash(chunk).as_bytes()
+    }
+}
+
 struct Sha1Hasher;
 impl Hasher for Sha1Hasher {
     fn hash(&self, chunk: &[u8]) -> [u8; 32] {
@@ -52,6 +59,7 @@ impl HasherFactory {
 
     pub fn createHasher(&self) -> Box<dyn Hasher> {
         match self.t {
+            HashType::BLAKE3 => Box::new(Blake3Hasher),
             HashType::SHA1 => Box::new(Sha1Hasher),
             HashType::SHA256 => Box::new(Sha256Hasher),
             HashType::MD5 => Box::new(Md5Hasher),
@@ -72,6 +80,16 @@ mod test {
         let mut out = [0u8; 32];
         out[..len].copy_from_slice(&hex::decode(hex).unwrap());
         out
+    }
+
+    #[test]
+    fn testBlake3Hasher() {
+        let data = createTestData();
+        let hasher = HasherFactory::new(HashType::BLAKE3).createHasher();
+        assert_eq!(
+            hasher.hash(data.as_bytes()),
+            makeExpected("28e77146a019c1264a6eb63097758a0eeacd2e867abb4e8b4925a4254cb19884", 32)
+        );
     }
 
     #[test]

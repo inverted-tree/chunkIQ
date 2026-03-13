@@ -29,6 +29,7 @@ pub enum Commands {
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
 pub enum HashType {
+    BLAKE3,
     SHA1,
     SHA256,
     MD5,
@@ -50,7 +51,7 @@ pub struct TraceArgs {
         long = "digest",
         help = "Which hash function is used to digest the chunks",
         value_enum,
-        default_value_t = HashType::SHA1
+        default_value_t = HashType::BLAKE3
     )]
     pub hashType: HashType,
 
