@@ -4,7 +4,7 @@ use md5::Md5;
 use sha1::Sha1;
 use sha2::Sha256;
 
-pub trait Hasher {
+pub trait Hasher: Send {
     fn hash(&self, chunk: &[u8]) -> [u8; 32];
 }
 

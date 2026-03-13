@@ -72,7 +72,7 @@ impl ChunkerType {
     }
 }
 
-pub trait Chunker {
+pub trait Chunker: Send {
     fn chunk<'a>(&self, data: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a>;
 }
 

@@ -26,8 +26,6 @@ pub struct ChunkingTask {
     offset: usize,
     length: usize,
     fileName: String,
-    hasherFactory: Arc<HasherFactory>,
-    chunkFactory: Arc<ChunkFactory>,
 }
 
 fn spawnWorkers(
@@ -39,6 +37,8 @@ fn spawnWorkers(
     globalChunkCount: Arc<AtomicUsize>,
     globalDupCount: Arc<AtomicUsize>,
     globalDupSize: Arc<AtomicUsize>,
+    hasherFactory: Arc<HasherFactory>,
+    chunkFactory: Arc<ChunkFactory>,
 ) -> Vec<thread::JoinHandle<()>> {
     let mut handles = Vec::with_capacity(numWorkers);
 
@@ -50,6 +50,8 @@ fn spawnWorkers(
         let globalChunkCount = Arc::clone(&globalChunkCount);
         let globalDupCount = Arc::clone(&globalDupCount);
         let globalDupSize = Arc::clone(&globalDupSize);
+        let chunker = chunkFactory.createChunker();
+        let hasher = hasherFactory.createHasher();
 
         let handle = thread::spawn(move || {
             while let Ok(task) = receiver.recv() {
@@ -61,8 +63,7 @@ fn spawnWorkers(
                 }
 
                 let fileContent = &task.mmap[task.offset..task.offset + task.length];
-                let chunks = task.chunkFactory.createChunker().chunk(fileContent);
-                let hasher = task.hasherFactory.createHasher();
+                let chunks = chunker.chunk(fileContent);
 
                 let mut localChunkCount: usize = 0;
                 let mut localDupCount: usize = 0;
@@ -100,7 +101,8 @@ fn spawnWorkers(
 
 pub fn run(args: &TraceArgs) -> Result<()> {
     let mut tasks: Vec<ChunkingTask> = Vec::new();
-    let hasherFactory: Arc<HasherFactory> = Arc::new(HasherFactory::new(args.hashType));
+    let hasherFactory = Arc::new(HasherFactory::new(args.hashType));
+    let chunkFactory = Arc::new(ChunkFactory::new(args.chunkerType));
     let fileStats: Arc<DashMap<String, FileStatus>> = Arc::new(DashMap::new());
 
     for filename in &args.fileNames {
@@ -108,7 +110,6 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         let mmap = Arc::new(unsafe { Mmap::map(&file)? });
         let fileLength = mmap.len();
         let fname: String = filename.to_string_lossy().into_owned();
-        let chunkFactory: Arc<ChunkFactory> = Arc::new(ChunkFactory::new(args.chunkerType.clone()));
 
         let mut offset = 0;
         while offset < fileLength {
@@ -118,8 +119,6 @@ pub fn run(args: &TraceArgs) -> Result<()> {
                 offset,
                 length,
                 fileName: fname.clone(),
-                hasherFactory: Arc::clone(&hasherFactory),
-                chunkFactory: Arc::clone(&chunkFactory),
             });
             offset += length;
         }
@@ -168,6 +167,8 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         Arc::clone(&chunkCount),
         Arc::clone(&dupCount),
         Arc::clone(&dupSize),
+        Arc::clone(&hasherFactory),
+        Arc::clone(&chunkFactory),
     );
 
     for task in tasks {
