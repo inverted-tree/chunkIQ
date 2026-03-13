@@ -9,7 +9,7 @@ use std::{
 
 use dashmap::DashMap;
 use ratatui::{
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Gauge, List, ListItem, Paragraph},
@@ -17,6 +17,15 @@ use ratatui::{
 };
 
 const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+/// Below this terminal width the file list is omitted to avoid layout artifacts.
+const MIN_LIST_WIDTH: u16 = 30;
+
+/// Minimum terminal dimensions to render any TUI. Below this the TUI is
+/// suppressed entirely (chunking continues unaffected). The TUI is re-enabled
+/// automatically if the terminal is resized back above these thresholds.
+const MIN_TUI_WIDTH: u16 = 20;
+const MIN_TUI_HEIGHT: u16 = 4;
 
 pub enum FileStatus {
     Queued,
@@ -38,27 +47,64 @@ pub struct TraceUiState {
     pub numWorkers: usize,
 }
 
-pub fn init(numFiles: usize) -> DefaultTerminal {
-    let height = (numFiles as u16 + 5).min(20);
-    ratatui::init_with_options(TerminalOptions {
-        viewport: Viewport::Inline(height),
-    })
+fn terminalBigEnough() -> bool {
+    crossterm::terminal::size()
+        .map(|(w, h)| w >= MIN_TUI_WIDTH && h >= MIN_TUI_HEIGHT)
+        .unwrap_or(false)
 }
 
-pub fn run(mut terminal: DefaultTerminal, state: Arc<TraceUiState>) {
+fn tryInit(numFiles: usize) -> Option<DefaultTerminal> {
+    if !terminalBigEnough() {
+        return None;
+    }
+    let height = (numFiles as u16 + 5).min(20);
+    Some(ratatui::init_with_options(TerminalOptions {
+        viewport: Viewport::Inline(height),
+    }))
+}
+
+pub fn run(state: Arc<TraceUiState>) {
+    let mut terminal: Option<DefaultTerminal> = tryInit(state.totalFiles);
     let mut tick: usize = 0;
+
     loop {
         let done = state.isDone.load(Ordering::Relaxed);
-        terminal.draw(|f| draw(f, &state, tick)).unwrap();
+        let bigEnough = terminalBigEnough();
+
+        match (&mut terminal, bigEnough) {
+            (Some(term), true) => {
+                // Draw; if ratatui fails (e.g. terminal became unusable), tear down gracefully.
+                if term.draw(|f| draw(f, &state, tick)).is_err() {
+                    ratatui::restore();
+                    terminal = None;
+                }
+            }
+            (Some(_), false) => {
+                // Terminal shrank below minimum — tear down and stop drawing.
+                ratatui::restore();
+                terminal = None;
+            }
+            (None, true) => {
+                // Terminal grew back above minimum — re-init and resume.
+                terminal = tryInit(state.totalFiles);
+            }
+            (None, false) => {
+                // Still too small, nothing to do.
+            }
+        }
+
         if done {
             break;
         }
         tick = tick.wrapping_add(1);
         thread::sleep(Duration::from_millis(80));
     }
-    ratatui::restore();
-    // Move cursor below the inline viewport so subsequent output is not overwritten
-    println!();
+
+    if terminal.is_some() {
+        ratatui::restore();
+        // Move cursor below the inline viewport so subsequent output is not overwritten.
+        println!();
+    }
 }
 
 fn fmtSize(bytes: usize) -> String {
@@ -79,14 +125,29 @@ fn fmtSize(bytes: usize) -> String {
 
 fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
     let area = frame.area();
+    let showFileList = area.width >= MIN_LIST_WIDTH;
 
-    let layout = Layout::vertical([
-        Constraint::Length(1), // header
-        Constraint::Min(1),    // file list
-        Constraint::Length(1), // stats
-        Constraint::Length(1), // gauge
-    ])
-    .split(area);
+    // Build a layout with or without the file list depending on terminal width.
+    // Returns (headerArea, fileListArea, statsArea, gaugeArea).
+    let (headerArea, fileListArea, statsArea, gaugeArea): (Rect, Option<Rect>, Rect, Rect) =
+        if showFileList {
+            let l = Layout::vertical([
+                Constraint::Length(1), // header
+                Constraint::Min(1),    // file list
+                Constraint::Length(1), // stats
+                Constraint::Length(1), // gauge
+            ])
+            .split(area);
+            (l[0], Some(l[1]), l[2], l[3])
+        } else {
+            let l = Layout::vertical([
+                Constraint::Length(1), // header
+                Constraint::Length(1), // stats
+                Constraint::Length(1), // gauge
+            ])
+            .split(area);
+            (l[0], None, l[1], l[2])
+        };
 
     // ── Header ───────────────────────────────────────────────────
     frame.render_widget(
@@ -107,12 +168,11 @@ fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
                 Style::default().fg(Color::DarkGray),
             ),
         ])),
-        layout[0],
+        headerArea,
     );
 
     // ── File List (auto-scrolling) ────────────────────────────────
-    {
-        let listArea = layout[1];
+    if let Some(listArea) = fileListArea {
         // Inner width: subtract 2 borders + 1 left pad + 1 icon + 2 spacing
         let innerWidth = listArea.width.saturating_sub(6) as usize;
         // Rows available inside the block borders
@@ -135,10 +195,7 @@ fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
 
         // Auto-scroll: anchor view so the first active file is visible,
         // with up to 2 completed files shown above it as context.
-        let firstActive = entries
-            .iter()
-            .position(|(_, c)| *c < 2)
-            .unwrap_or(0);
+        let firstActive = entries.iter().position(|(_, c)| *c < 2).unwrap_or(0);
         let scrollStart = firstActive.saturating_sub(2);
 
         // Reserve rows for overflow indicators as needed, then compute the window.
@@ -182,9 +239,10 @@ fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
                 ),
             };
 
-            // Truncate to tail — the filename end is most informative
+            // Truncate to tail — the filename end is most informative.
+            // saturating_sub guards against innerWidth == 0.
             let display = if path.len() > innerWidth {
-                format!("…{}", &path[path.len().saturating_sub(innerWidth - 1)..])
+                format!("…{}", &path[path.len().saturating_sub(innerWidth.saturating_sub(1))..])
             } else {
                 path.clone()
             };
@@ -243,15 +301,19 @@ fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
                 Span::raw("saved "),
                 Span::styled(fmtSize(dupSize), Style::default().fg(Color::Green)),
             ])),
-            layout[2],
+            statsArea,
         );
     }
 
     // ── Progress Gauge ─────────────────────────────────────────────
     {
         let completed = state.completedTasks.load(Ordering::Relaxed);
-        let total = state.totalTasks.max(1);
-        let ratio = (completed as f64 / total as f64).min(1.0);
+        // If there are no tasks (all files were empty), treat as immediately complete.
+        let ratio = if state.totalTasks == 0 {
+            1.0
+        } else {
+            (completed as f64 / state.totalTasks as f64).min(1.0)
+        };
         let doneFiles = state
             .fileStats
             .iter()
@@ -268,7 +330,7 @@ fn draw(frame: &mut Frame, state: &TraceUiState, tick: usize) {
                     state.totalFiles,
                     ratio * 100.0
                 )),
-            layout[3],
+            gaugeArea,
         );
     }
 }

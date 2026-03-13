@@ -173,10 +173,9 @@ pub fn run(args: &TraceArgs) -> Result<()> {
         numWorkers,
     });
 
-    let terminal = crate::tui::tui::init(numFiles);
     let tuiHandle = {
         let state = Arc::clone(&uiState);
-        thread::spawn(move || crate::tui::tui::run(terminal, state))
+        thread::spawn(move || crate::tui::tui::run(state))
     };
 
     let workers = spawnWorkers(

@@ -10,8 +10,7 @@ impl FileChunker {
 
 impl Chunker for FileChunker {
     fn chunk<'a>(&self, data: &'a [u8]) -> Box<dyn Iterator<Item = &'a [u8]> + 'a> {
-        let fileSize = data.len();
-        Box::new(data.chunks(fileSize))
+        Box::new(std::iter::once(data))
     }
 }
 
@@ -31,6 +30,15 @@ mod tests {
         let mmap = unsafe { Mmap::map(&file).unwrap() };
 
         (data, mmap)
+    }
+
+    #[test]
+    fn testFileChunkerEmpty() {
+        let chunker = FileChunker::new();
+        let mut chunks = chunker.chunk(&[]);
+        // Must yield exactly one chunk — the empty slice itself — without panicking
+        assert_eq!(chunks.next(), Some(&[][..]));
+        assert!(chunks.next().is_none());
     }
 
     #[test]
