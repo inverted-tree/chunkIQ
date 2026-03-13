@@ -4,7 +4,7 @@ use crate::tui::tui::{FileStatus, TraceUiState};
 
 use crossbeam_channel::{bounded, Receiver};
 use dashmap::{DashMap, DashSet};
-use memmap2::Mmap;
+use memmap2::{Advice, Mmap};
 
 use crate::util::arguments::TraceArgs;
 
@@ -107,7 +107,9 @@ pub fn run(args: &TraceArgs) -> Result<()> {
 
     for filename in &args.fileNames {
         let file = File::open(filename)?;
-        let mmap = Arc::new(unsafe { Mmap::map(&file)? });
+        let mmap = unsafe { Mmap::map(&file)? };
+        let _ = mmap.advise(Advice::Sequential);
+        let mmap = Arc::new(mmap);
         let fileLength = mmap.len();
         let fname: String = filename.to_string_lossy().into_owned();
 
