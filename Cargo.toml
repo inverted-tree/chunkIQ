@@ -15,7 +15,7 @@ fastcdc = "3.2"
 md-5 = "0.10.6"
 memmap2 = "0.9.5"
 ratatui = "0.30.0"
-sha1 = "0.10.6"
+sha1 = "0.11.0"
 sha2 = "0.10.9"
 
 [dev-dependencies]
