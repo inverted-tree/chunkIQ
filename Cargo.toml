@@ -9,7 +9,7 @@ clap = { version = "4.6.1", features = ["derive"] }
 crossbeam = { version = "0.8.4" }
 crossbeam-channel = "0.5.13"
 crossterm = "0.29.0"
-dashmap = "6.1.0"
+dashmap = "6.2.1"
 digest = "0.11.3"
 fastcdc = "4.0"
 md-5 = "0.11.0"
